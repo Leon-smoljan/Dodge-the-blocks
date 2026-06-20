@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dodge the Blocks</title>
+  <style>
+    :root {
+      --bg: #111;
+      --canvas-bg: #222;
+      --panel: rgba(0,0,0,0.6);
+      --accent: #ff4d4d;
+      --text: #fff;
+    }
+
+    html,body { height:100%; margin:0; font-family: Arial, Helvetica, sans-serif; background:var(--bg); color:var(--text); }
+    .wrap {
+      min-height:100%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:20px;
+      box-sizing:border-box;
+      position:relative;
+    }
+
+    .game-area {
+      position:relative;
+      width:400px;
+      max-width:94vw;
+      background:var(--panel);
+      padding:12px;
+      border-radius:10px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.6);
+    }
+
+    canvas { display:block; background:var(--canvas-bg); width:100%; height:auto; border-radius:6px; }
+
+    #score {
+      position:absolute; top:16px; left:16px;
+      font-size:18px; font-weight:600;
+      background:rgba(0,0,0,0.35); padding:6px 10px; border-radius:6px;
+    }
+
+    .controls {
+      display:flex; gap:12px; justify-content:center; margin-top:12px;
+      user-select:none; touch-action:none;
+    }
+
+    .btn {
+      background:#333; color:var(--text); border:none; padding:12px 18px; border-radius:8px;
+      font-size:16px; cursor:pointer;
+      display:inline-flex; align-items:center; justify-content:center;
+      min-width:100px;
+    }
+
+    .btn:active { transform:translateY(1px); }
+
+    .touch-controls {
+      display:flex; gap:10px; justify-content:center; margin-top:10px;
+    }
+
+    .touch-btn {
+      width:90px; height:60px; background:#222; border-radius:8px; display:flex;
+      align-items:center; justify-content:center; color:var(--text); font-weight:700; font-size:18px;
+      box-shadow: inset 0 -6px 18px rgba(0,0,0,0.4);
+      touch-action:none;
+      user-select:none;
+    }
+
+    .overlay {
+      position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+      background:linear-gradient(180deg, rgba(0,0,0,0.6), rgba(0,0,0,0.5));
+      border-radius:6px;
+    }
+
+    .panel {
+      background:rgba(20,20,20,0.9); padding:18px; border-radius:10px; width:320px; text-align:center;
+    }
+
+    .panel h1 { margin:0 0 6px; font-size:22px; }
+    .panel p { margin:8px 0 14px; color:#ddd; font-size:14px; }
+    .small { font-size:13px; color:#bbb; margin-top:6px; }
+
+    @media (max-width:420px) {
+      .touch-btn { width:42vw; height:54px; }
+      .btn { min-width:86px; padding:10px 14px; font-size:15px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game-area" role="main">
+      <div id="score">Score: 0</div>
+      <canvas id="game" width="400" height="600" aria-label="Dodge the Blocks game"></canvas>
+
+      <!-- Start overlay -->
+      <div id="startOverlay" class="overlay">
+        <div class="panel">
+          <h1>Dodge the Blocks</h1>
+          <p>Undvik fallande block så länge du kan. Använd piltangenter eller tryck på knapparna nedanför (mobil).</p>
+          <button id="startBtn" class="btn">Starta spelet</button>
+          <div class="small">Högsta poäng sparas i din webbläsare.</div>
+        </div>
+      </div>
+
+      <!-- Game over overlay -->
+      <div id="gameOverOverlay" class="overlay" style="display:none;">
+        <div class="panel">
+          <h1>Game Over</h1>
+          <p id="finalScore">Score: 0</p>
+          <p id="bestScore" class="small">Best: 0</p>
+          <div style="display:flex; gap:10px; justify-content:center; margin-top:12px;">
+            <button id="restartBtn" class="btn">Spela igen</button>
+            <button id="menuBtn" class="btn">Till start</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px; text-align:center;">
+        <div class="touch-controls" aria-hidden="false">
+          <div id="leftBtn" class="touch-btn">◀</div>
+          <div id="rightBtn" class="touch-btn">▶</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    // Game state
+    let running = false;
+    let player = { x: 185, y: 550, size: 30, speed: 6 };
+    let blocks = [];
+    let score = 0;
+    let spawnInterval = null;
+    let lastTime = 0;
+
+    // UI
+    const scoreEl = document.getElementById("score");
+    const startOverlay = document.getElementById("startOverlay");
+    const gameOverOverlay = document.getElementById("gameOverOverlay");
+    const startBtn = document.getElementById("startBtn");
+    const restartBtn = document.getElementById("restartBtn");
+    const menuBtn = document.getElementById("menuBtn");
+    const finalScoreEl = document.getElementById("finalScore");
+    const bestScoreEl = document.getElementById("bestScore");
+
+    // Input handling
+    const keys = { left: false, right: false };
+    window.addEventListener("keydown", e => {
+      if (e.key === "ArrowLeft" || e.key === "a") keys.left = true;
+      if (e.key === "ArrowRight" || e.key === "d") keys.right = true;
+    });
+    window.addEventListener("keyup", e => {
+      if (e.key === "ArrowLeft" || e.key === "a") keys.left = false;
+      if (e.key === "ArrowRight" || e.key === "d") keys.right = false;
+    });
+
+    // Touch controls
+    const leftBtn = document.getElementById("leftBtn");
+    const rightBtn = document.getElementById("rightBtn");
+    leftBtn.addEventListener("pointerdown", e => { e.preventDefault(); keys.left = true; });
+    leftBtn.addEventListener("pointerup", e => { e.preventDefault(); keys.left = false; });
+    leftBtn.addEventListener("pointercancel", e => { keys.left = false; });
+    rightBtn.addEventListener("pointerdown", e => { e.preventDefault(); keys.right = true; });
+    rightBtn.addEventListener("pointerup", e => { e.preventDefault(); keys.right = false; });
+    rightBtn.addEventListener("pointercancel", e => { keys.right = false; });
+
+    // Keep player inside canvas
+    function clampPlayer() {
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.size > canvas.width) player.x = canvas.width - player.size;
+    }
+
+    // Blocks spawn
+    function spawnBlock() {
+      const size = 24 + Math.random() * 36; // 24-60 px
+      blocks.push({
+        x: Math.random() * (canvas.width - size),
+        y: -size - 10,
+        size,
+        speed: 2.5 + Math.random() * 4 // 2.5 - 6.5
+      });
+    }
+
+    function startGame() {
+      running = true;
+      score = 0;
+      blocks = [];
+      player.x = (canvas.width - player.size) / 2;
+      scoreEl.innerText = "Score: 0";
+      startOverlay.style.display = "none";
+      gameOverOverlay.style.display = "none";
+      // spawn frequency speeds up slightly with score using setInterval
+      spawnInterval = setInterval(spawnBlock, 700);
+      lastTime = performance.now();
+      requestAnimationFrame(loop);
+    }
+
+    function endGame() {
+      running = false;
+      clearInterval(spawnInterval);
+      spawnInterval = null;
+      // show overlay
+      finalScoreEl.innerText = "Score: " + score;
+      const best = Math.max(score, Number(localStorage.getItem("dodge_best") || 0));
+      localStorage.setItem("dodge_best", best);
+      bestScoreEl.innerText = "Best: " + best;
+      gameOverOverlay.style.display = "flex";
+    }
+
+    function rectsOverlap(a, b) {
+      return a.x < b.x + b.size && a.x + a.size > b.x && a.y < b.y + b.size && a.y + a.size > b.y;
+    }
+
+    function loop(timestamp) {
+      if (!running) return;
+      const dt = (timestamp - lastTime) / 16.666; // approx frames (60FPS) multiplier
+      lastTime = timestamp;
+
+      // Movement
+      const moveDir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+      player.x += player.speed * moveDir * dt;
+      clampPlayer();
+
+      // Update blocks
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const b = blocks[i];
+        b.y += b.speed * dt;
+
+        // collision
+        if (rectsOverlap(player, b)) {
+          return endGame();
+        }
+
+        // off-screen
+        if (b.y > canvas.height) {
+          blocks.splice(i, 1);
+          score++;
+          // optionally make spawn faster every 10 points
+          if (score % 10 === 0 && spawnInterval) {
+            clearInterval(spawnInterval);
+            const newRate = Math.max(220, 700 - Math.floor(score / 10) * 50);
+            spawnInterval = setInterval(spawnBlock, newRate);
+          }
+          scoreEl.innerText = "Score: " + score;
+        }
+      }
+
+      // Draw
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Player
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(Math.round(player.x), Math.round(player.y), player.size, player.size);
+
+      // Blocks
+      blocks.forEach(b => {
+        ctx.fillStyle = "#ff4d4d";
+        ctx.fillRect(Math.round(b.x), Math.round(b.y), Math.round(b.size), Math.round(b.size));
+      });
+
+      requestAnimationFrame(loop);
+    }
+
+    // Start / Restart buttons
+    startBtn.addEventListener("click", startGame);
+    restartBtn.addEventListener("click", () => {
+      startGame();
+    });
+    menuBtn.addEventListener("click", () => {
+      gameOverOverlay.style.display = "none";
+      startOverlay.style.display = "flex";
+    });
+
+    // Prevent accidental scrolling on mobile while touching controls
+    document.body.addEventListener('touchmove', function(e){ if (e.target === leftBtn || e.target === rightBtn) e.preventDefault(); }, { passive:false });
+
+    // Ensure player stays in bounds if window resizes canvas (we use fixed canvas pixel size for consistent gameplay)
+    window.addEventListener("resize", clampPlayer);
+
+    // Initialize best score display on start screen
+    (function init() {
+      const best = Number(localStorage.getItem("dodge_best") || 0);
+      const msg = best ? ("Högsta: " + best) : "Ingen highscore ännu";
+      const small = document.createElement("div");
+      small.className = "small";
+      small.style.marginTop = "10px";
+      small.innerText = msg;
+      startOverlay.querySelector(".panel").appendChild(small);
+    })();
+  </script>
+</body>
+</html>
